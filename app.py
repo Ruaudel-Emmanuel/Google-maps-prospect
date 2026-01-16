@@ -3,12 +3,12 @@
 Google Maps Lead Scraper – Complete Flask App with Budget Tracking
 
 Features:
-  - Beautiful dark-themed HTML interface
-  - Google Places API integration with usage tracking
-  - Monthly budget enforcement ($200 free credit)
-  - CSV & JSON export
-  - Real-time usage dashboard
-  - GDPR-compliant
+- Beautiful dark-themed HTML interface
+- Google Places API integration with usage tracking
+- Monthly budget enforcement ($200 free credit)
+- CSV & JSON export
+- Real-time usage dashboard
+- GDPR-compliant
 
 Author: Your Name
 License: MIT
@@ -19,18 +19,14 @@ IMPORTANT: This app uses Google Places API.
 - Monitor usage via /api/usage endpoint
 - App automatically blocks requests when budget is reached
 """
-
 import os
-import json
 import logging
 from datetime import datetime
-from typing import Dict, Optional, Tuple
-
 from flask import Flask, request, jsonify, render_template_string
 from dotenv import load_dotenv
 
 # Import our usage tracker module
-from usage_tracker import UsageTracker, create_tracker
+from usage_tracker import create_tracker
 
 # Load environment variables
 load_dotenv()
@@ -41,28 +37,31 @@ app.config['JSON_SORT_KEYS'] = False
 
 # Initialize usage tracker with limits
 TRACKER_CONFIG = {
-    "max_requests_per_month": int(os.getenv("MAX_REQUESTS_PER_MONTH", 20000)),
-    "max_cost_per_month": float(os.getenv("MAX_COST_PER_MONTH", 180.0)),
+    "max_requests_per_month": int(
+        os.getenv("MAX_REQUESTS_PER_MONTH", 20000)
+    ),
+    "max_cost_per_month": float(
+        os.getenv("MAX_COST_PER_MONTH", 180.0)
+    ),
     "cost_per_request": float(os.getenv("COST_PER_REQUEST", 0.009))
 }
-
 tracker = create_tracker(TRACKER_CONFIG)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ============================================================================
+# ============================================================
 # HTML TEMPLATE
-# ============================================================================
-
+# ============================================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Google Maps Lead Scraper – Budget Protected</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+    <title>Google Maps Lead Scraper - Desktop Edition</title>
     <style>
         * {
             margin: 0;
@@ -70,755 +69,904 @@ HTML_TEMPLATE = """
             box-sizing: border-box;
         }
 
+        :root {
+            --primary: #16a085;
+            --primary-hover: #138d75;
+            --bg-dark: #1e1e2e;
+            --bg-card: #16213e;
+            --bg-input: #1a1a2e;
+            --text-main: #e0e0e0;
+            --text-secondary: #999;
+            --alert-warning: #ffc107;
+            --alert-danger: #f44336;
+            --alert-success: #4caf50;
+        }
+
         body {
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
-            color: #e5e7eb;
+            font-family: -apple-system, BlinkMacSystemFont,
+                'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1e1e2e 0%,
+                #0f3460 100%);
+            color: var(--text-main);
             min-height: 100vh;
-            padding: 1rem;
+            padding: 20px;
         }
 
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 1.5rem;
         }
 
         .header {
+            background: linear-gradient(135deg, #0f3460 0%,
+                #16a085 100%);
+            padding: 30px;
+            border-radius: 12px 12px 0 0;
             text-align: center;
-            margin-bottom: 2rem;
+            margin-bottom: 0;
         }
 
-        h1 {
-            font-size: 2rem;
-            margin-bottom: 0.5rem;
-            background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+        .header h1 {
+            font-size: 2.2em;
+            margin-bottom: 10px;
+            color: white;
         }
 
-        .subtitle {
-            font-size: 0.95rem;
-            color: #9ca3af;
+        .header p {
+            font-size: 1em;
+            opacity: 0.9;
+            color: rgba(255, 255, 255, 0.9);
         }
 
-        .grid {
+        .content {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+            gap: 0;
+            background: var(--bg-card);
+            border-radius: 0 0 12px 12px;
+            overflow: hidden;
+            min-height: 600px;
         }
 
-        .card {
-            background: rgba(2, 6, 23, 0.8);
-            border: 1px solid rgba(30, 41, 59, 0.6);
-            border-radius: 0.75rem;
-            padding: 1.5rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(10px);
+        .panel {
+            padding: 30px;
+            border-right: 1px solid rgba(22, 160, 133, 0.2);
         }
 
-        .card h2 {
-            font-size: 1.1rem;
-            margin-bottom: 1rem;
-            color: #f1f5f9;
+        .panel:last-child {
+            border-right: none;
+        }
+
+        .panel h2 {
+            color: var(--primary);
+            margin-bottom: 20px;
+            font-size: 1.4em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
         .form-group {
-            margin-bottom: 1rem;
+            margin-bottom: 20px;
         }
 
         label {
             display: block;
-            font-size: 0.85rem;
-            font-weight: 600;
-            margin-bottom: 0.4rem;
-            color: #f3f4f6;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+            font-weight: 500;
+            font-size: 0.95em;
+            color: var(--text-main);
         }
 
-        input[type="text"] {
+        input[type="text"],
+        input[type="number"],
+        select {
             width: 100%;
-            padding: 0.65rem 0.85rem;
-            border-radius: 0.5rem;
-            border: 1px solid rgba(148, 163, 184, 0.3);
-            background: rgba(15, 23, 42, 0.6);
-            color: #f1f5f9;
-            font-size: 0.95rem;
-            transition: all 0.2s ease;
+            padding: 12px;
+            background: var(--bg-input);
+            border: 1px solid rgba(22, 160, 133, 0.3);
+            border-radius: 6px;
+            color: var(--text-main);
+            font-size: 1em;
+            transition: all 0.3s ease;
         }
 
-        input[type="text"]:focus {
+        input:focus,
+        select:focus {
             outline: none;
-            border-color: #38bdf8;
-            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
-            background: rgba(15, 23, 42, 0.9);
+            border-color: var(--primary);
+            box-shadow: 0 0 8px rgba(22, 160, 133, 0.4);
+            background: rgba(22, 160, 133, 0.1);
         }
 
         button {
-            padding: 0.75rem 1.5rem;
-            border-radius: 0.5rem;
+            width: 100%;
+            padding: 14px;
+            background: var(--primary);
+            color: white;
             border: none;
+            border-radius: 6px;
+            font-size: 1em;
             font-weight: 600;
-            font-size: 0.95rem;
             cursor: pointer;
             transition: all 0.3s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            width: 100%;
+            margin-bottom: 10px;
         }
 
-        .btn-primary {
-            background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-            color: #0f172a;
-            margin-top: 0.75rem;
-        }
-
-        .btn-primary:hover:not(:disabled) {
+        button:hover {
+            background: var(--primary-hover);
             transform: translateY(-2px);
-            box-shadow: 0 15px 40px rgba(56, 189, 248, 0.5);
+            box-shadow: 0 4px 12px
+                rgba(22, 160, 133, 0.3);
         }
 
-        .btn-primary:disabled {
-            opacity: 0.5;
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #555;
             cursor: not-allowed;
+            transform: none;
         }
 
-        .usage-bar {
-            width: 100%;
-            height: 8px;
-            background: rgba(148, 163, 184, 0.2);
-            border-radius: 999px;
-            overflow: hidden;
-            margin: 0.75rem 0;
+        .btn-secondary {
+            background: #1e6f5c;
         }
 
-        .usage-bar-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #10b981, #38bdf8, #f59e0b, #ef4444);
-            width: var(--percent);
-            transition: width 0.3s ease;
+        .btn-secondary:hover {
+            background: #155a49;
         }
 
-        .usage-stats {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.75rem;
-            margin-top: 0.75rem;
-        }
-
-        .stat {
-            background: rgba(30, 41, 59, 0.5);
-            padding: 0.75rem;
-            border-radius: 0.5rem;
-            font-size: 0.85rem;
-        }
-
-        .stat-label {
-            color: #9ca3af;
-            font-size: 0.75rem;
-            margin-bottom: 0.25rem;
-        }
-
-        .stat-value {
-            color: #f1f5f9;
-            font-weight: 600;
-            font-size: 0.95rem;
-        }
-
-        .alert {
-            padding: 1rem;
-            border-radius: 0.5rem;
-            margin-bottom: 1rem;
-            border-left: 4px solid;
-        }
-
-        .alert-success {
-            background: rgba(16, 185, 129, 0.1);
-            border-color: #10b981;
-            color: #86efac;
-        }
-
-        .alert-warning {
-            background: rgba(245, 158, 11, 0.1);
-            border-color: #f59e0b;
-            color: #fcd34d;
-        }
-
-        .alert-error {
-            background: rgba(239, 68, 68, 0.1);
-            border-color: #ef4444;
-            color: #fca5a5;
-        }
-
-        .results-section {
-            margin-top: 2rem;
-        }
-
-        .results-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-
-        .results-header h2 {
-            font-size: 1.1rem;
-            color: #f1f5f9;
-        }
-
-        .results-count {
-            font-size: 0.85rem;
-            color: #9ca3af;
-            background: rgba(56, 189, 248, 0.1);
-            padding: 0.35rem 0.75rem;
-            border-radius: 999px;
-            border: 1px solid rgba(56, 189, 248, 0.3);
+        /* Search Results */
+        .results-container {
+            margin-top: 20px;
+            max-height: 350px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            padding: 15px;
         }
 
         .result-item {
-            border-radius: 0.75rem;
-            border: 1px solid rgba(30, 41, 59, 0.8);
-            padding: 1rem;
-            margin-bottom: 0.85rem;
-            background: rgba(30, 41, 59, 0.5);
-            transition: all 0.2s ease;
+            background: rgba(22, 160, 133, 0.1);
+            border-left: 3px solid var(--primary);
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            font-size: 0.9em;
         }
 
-        .result-item:hover {
-            border-color: rgba(56, 189, 248, 0.5);
-            box-shadow: 0 10px 25px rgba(56, 189, 248, 0.1);
+        .result-item strong {
+            color: var(--primary);
+            display: block;
+            margin-bottom: 5px;
         }
 
-        .result-header {
-            display: flex;
-            justify-content: space-between;
-            gap: 1rem;
-            margin-bottom: 0.65rem;
+        .result-item small {
+            color: var(--text-secondary);
         }
 
-        .result-name {
-            font-weight: 600;
-            color: #f9fafb;
-            font-size: 0.95rem;
+        /* Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
         }
 
-        .result-rating {
-            font-size: 0.85rem;
-            color: #facc15;
-            white-space: nowrap;
-        }
-
-        .result-meta {
-            margin-bottom: 0.5rem;
-            font-size: 0.8rem;
-            color: #9ca3af;
-        }
-
-        .badge {
-            display: inline-block;
-            margin-right: 0.4rem;
-            padding: 0.15rem 0.5rem;
-            border-radius: 999px;
-            border: 1px solid rgba(148, 163, 184, 0.4);
-            background: rgba(15, 23, 42, 0.8);
-            font-size: 0.7rem;
-            color: #cbd5e1;
-            font-weight: 500;
-        }
-
-        .loading {
+        .stat-card {
+            background: rgba(22, 160, 133, 0.1);
+            border: 1px solid rgba(22, 160, 133, 0.3);
+            border-radius: 6px;
+            padding: 15px;
             text-align: center;
-            color: #9ca3af;
-            padding: 2rem;
         }
 
-        .spinner {
-            display: inline-block;
-            width: 1rem;
-            height: 1rem;
-            border: 2px solid rgba(56, 189, 248, 0.3);
-            border-top-color: #38bdf8;
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: var(--primary);
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+        }
+
+        /* Progress Bar */
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary),
+                var(--primary-hover));
+            transition: width 0.3s ease;
+        }
+
+        /* Alerts */
+        .alert {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            border-left: 4px solid;
+            display: none;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .alert-warning {
+            background: rgba(255, 193, 7, 0.1);
+            border-color: var(--alert-warning);
+            color: var(--alert-warning);
+        }
+
+        .alert-danger {
+            background: rgba(244, 67, 54, 0.1);
+            border-color: var(--alert-danger);
+            color: var(--alert-danger);
+        }
+
+        .alert-success {
+            background: rgba(76, 175, 80, 0.1);
+            border-color: var(--alert-success);
+            color: var(--alert-success);
+        }
+
+        /* Export Section */
+        .export-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(22, 160, 133, 0.2);
+        }
+
+        .export-section h3 {
+            color: var(--primary);
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .button-group button {
+            margin-bottom: 0;
+        }
+
+        /* Loader */
+        .loader {
+            display: none;
+            border: 3px solid rgba(22, 160, 133, 0.3);
+            border-top: 3px solid var(--primary);
             border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            margin-right: 0.5rem;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+
+        .loader.show {
+            display: block;
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
-        .export-buttons {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 1rem;
-        }
-
-        .btn-export {
-            padding: 0.5rem 1rem;
-            font-size: 0.8rem;
-            background: rgba(148, 163, 184, 0.1);
-            color: #cbd5e1;
-            border: 1px solid rgba(148, 163, 184, 0.3);
-            border-radius: 0.4rem;
-            cursor: pointer;
-            flex: 1;
-        }
-
-        .btn-export:hover {
-            background: rgba(148, 163, 184, 0.2);
-        }
-
+        /* Responsive */
         @media (max-width: 768px) {
-            .grid {
+            .content {
                 grid-template-columns: 1fr;
             }
 
-            .usage-stats {
+            .panel {
+                border-right: none;
+                border-bottom: 1px solid
+                    rgba(22, 160, 133, 0.2);
+            }
+
+            .panel:last-child {
+                border-bottom: none;
+            }
+
+            .header h1 {
+                font-size: 1.6em;
+            }
+
+            .stats-grid {
                 grid-template-columns: 1fr;
             }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--primary-hover);
         }
     </style>
 </head>
 <body>
-<div class="container">
-    <div class="header">
-        <h1>🗺️ Google Maps Lead Scraper</h1>
-        <p class="subtitle">Automate B2B prospection with budget protection</p>
-    </div>
-
-    <div class="grid">
-        <!-- LEFT: Search Form + Usage Dashboard -->
-        <div>
-            <div class="card">
-                <h2>Search Leads</h2>
-                <form id="scrape-form">
-                    <div class="form-group">
-                        <label for="query">Business Type</label>
-                        <input 
-                            id="query" 
-                            name="query" 
-                            type="text"
-                            placeholder="e.g. plumber, electrician"
-                            required
-                        >
-                    </div>
-
-                    <div class="form-group">
-                        <label for="location">Location</label>
-                        <input 
-                            id="location" 
-                            name="location" 
-                            type="text"
-                            placeholder="e.g. Rennes, Paris"
-                            required
-                        >
-                    </div>
-
-                    <button type="submit" class="btn-primary" id="submit-btn">
-                        Generate Leads
-                    </button>
-                </form>
-            </div>
-
-            <div class="card" style="margin-top: 1.5rem;">
-                <h2>📊 API Usage This Month</h2>
-                <div id="usage-alert"></div>
-                <div class="usage-bar">
-                    <div class="usage-bar-fill" id="usage-bar-fill" style="--percent: 0%"></div>
-                </div>
-                <div class="usage-stats" id="usage-stats"></div>
-                <p style="font-size: 0.8rem; color: #6b7280; margin-top: 0.75rem;">
-                    💡 You have a free $200 credit per month with Google.
-                    <br>This app tracks and blocks requests when budget is reached.
-                </p>
-            </div>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ Google Maps Lead Scraper</h1>
+            <p>Prospecter sur Google Maps avec protection
+                budgétaire</p>
         </div>
 
-        <!-- RIGHT: Results -->
-        <div>
-            <div class="card">
-                <div class="results-section" id="results-section" style="display: none;">
-                    <div class="results-header">
-                        <h2>Results</h2>
-                        <span class="results-count" id="results-count">0 leads</span>
-                    </div>
-                    <div id="results"></div>
-                    <div class="export-buttons" id="export-buttons"></div>
+        <div class="content">
+            <!-- Panel Gauche: Recherche -->
+            <div class="panel">
+                <h2>🔍 Recherche de prospects</h2>
+
+                <div class="form-group">
+                    <label for="query">Requête de
+                        recherche</label>
+                    <input type="text" id="query"
+                        placeholder="ex: plombiers,
+                            électriciens...">
                 </div>
-                <div id="empty-state" style="text-align: center; color: #9ca3af; padding: 2rem;">
-                    <p>👈 Search for leads in the left panel</p>
+
+                <div class="form-group">
+                    <label for="location">Localisation
+                        (GPS)</label>
+                    <input type="text" id="location"
+                        placeholder="48.8566, 2.3522"
+                        value="48.8566, 2.3522">
+                </div>
+
+                <div class="form-group">
+                    <label for="radius">Rayon (km)</label>
+                    <input type="number" id="radius"
+                        min="1" max="50" value="5">
+                </div>
+
+                <button id="searchBtn"
+                    onclick="performSearch()">
+                    🔍 Rechercher et Scraper
+                </button>
+
+                <div class="loader" id="loader"></div>
+
+                <div id="searchAlert" class="alert"></div>
+
+                <div class="results-container" id="results">
+                    <p style="color: var(--text-secondary);
+                        text-align: center; padding: 20px;">
+                        Aucun résultat pour le moment
+                    </p>
                 </div>
             </div>
-        </div>
-    </div>
-</div>
 
-<script>
-const form = document.getElementById('scrape-form');
-const resultsDiv = document.getElementById('results');
-const resultsSection = document.getElementById('results-section');
-const resultsCount = document.getElementById('results-count');
-const emptyState = document.getElementById('empty-state');
-const submitBtn = document.getElementById('submit-btn');
-const exportButtons = document.getElementById('export-buttons');
+            <!-- Panel Droit: Stats et Export -->
+            <div class="panel">
+                <h2>📊 Utilisation & Limites</h2>
 
-// Load usage on page load
-window.addEventListener('load', updateUsageDisplay);
-
-async function updateUsageDisplay() {
-    try {
-        const res = await fetch('/api/usage');
-        const data = await res.json();
-        
-        const percent = data.percent_used;
-        const fillEl = document.getElementById('usage-bar-fill');
-        fillEl.style.setProperty('--percent', percent + '%');
-        
-        const alertEl = document.getElementById('usage-alert');
-        let alertClass = 'alert-success';
-        let alertMsg = '✅ API usage normal';
-        
-        if (percent >= 100) {
-            alertClass = 'alert-error';
-            alertMsg = '🔴 Budget exceeded';
-            submitBtn.disabled = true;
-        } else if (percent >= 80) {
-            alertClass = 'alert-warning';
-            alertMsg = '🟠 Warning: budget 80%+ used';
-        }
-        
-        alertEl.innerHTML = `<div class="alert ${alertClass}">${alertMsg}</div>`;
-        
-        const statsEl = document.getElementById('usage-stats');
-        statsEl.innerHTML = `
-            <div class="stat">
-                <div class="stat-label">Requests Used</div>
-                <div class="stat-value">${data.requests}/${data.max_requests}</div>
-            </div>
-            <div class="stat">
-                <div class="stat-label">Cost Used</div>
-                <div class="stat-value">$${data.cost}/$${data.max_cost}</div>
-            </div>
-            <div class="stat">
-                <div class="stat-label">% Used</div>
-                <div class="stat-value">${data.percent_used}%</div>
-            </div>
-            <div class="stat">
-                <div class="stat-label">Remaining</div>
-                <div class="stat-value">${data.requests_remaining} requests</div>
-            </div>
-        `;
-        
-    } catch (err) {
-        console.error("Failed to fetch usage:", err);
-    }
-}
-
-form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    const query = document.getElementById('query').value.trim();
-    const location = document.getElementById('location').value.trim();
-    
-    if (!query || !location) return;
-    
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Checking budget...';
-    emptyState.style.display = 'none';
-    resultsDiv.innerHTML = '<div class="loading"><span class="spinner"></span>Generating leads...</div>';
-    resultsSection.style.display = 'block';
-    
-    try {
-        const res = await fetch('/api/scrape', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, location })
-        });
-        
-        const data = await res.json();
-        
-        if (data.error) {
-            resultsDiv.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Generate Leads';
-            updateUsageDisplay();
-            return;
-        }
-        
-        if (!Array.isArray(data.leads) || data.leads.length === 0) {
-            resultsDiv.innerHTML = '<p style="color: #9ca3af;">No leads found.</p>';
-            resultsCount.textContent = '0 leads';
-        } else {
-            resultsCount.textContent = data.leads.length + ' lead' + (data.leads.length !== 1 ? 's' : '');
-            resultsDiv.innerHTML = data.leads.map((lead, idx) => `
-                <div class="result-item">
-                    <div class="result-header">
-                        <div>
-                            <div class="result-name">${idx + 1}. ${lead.name}</div>
-                            <div class="result-meta">${lead.category}</div>
+                <!-- Stats -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value"
+                            id="totalRequests">0
                         </div>
-                        <div class="result-rating">⭐ ${lead.rating} (${lead.review_count})</div>
+                        <div class="stat-label">
+                            Requêtes ce mois
+                        </div>
                     </div>
-                    <div class="result-meta">📍 ${lead.address}</div>
-                    <div class="result-meta">
-                        ${lead.phone ? '📞 ' + lead.phone : ''}
-                        ${lead.website ? '<span class="badge">Website</span>' : ''}
-                        ${lead.email ? '<span class="badge">Email</span>' : ''}
+                    <div class="stat-card">
+                        <div class="stat-value" id="costUsed">
+                            $0.00
+                        </div>
+                        <div class="stat-label">
+                            Coût utilisé
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value"
+                            id="requestsLeft">
+                            20000
+                        </div>
+                        <div class="stat-label">
+                            Requêtes restantes
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="budgetLeft">
+                            $180.00
+                        </div>
+                        <div class="stat-label">
+                            Budget restant
+                        </div>
                     </div>
                 </div>
-            `).join('');
-            
-            exportButtons.innerHTML = `
-                <button class="btn-export" onclick="exportCSV(${JSON.stringify(data.leads).replace(/"/g, '&quot;')})">
-                    📥 Export CSV
-                </button>
-                <button class="btn-export" onclick="exportJSON(${JSON.stringify(data.leads).replace(/"/g, '&quot;')})">
-                    📥 Export JSON
-                </button>
-            `;
+
+                <!-- Progress Bar -->
+                <div class="progress-bar">
+                    <div class="progress-fill"
+                        id="budgetProgress"
+                        style="width: 0%;">
+                    </div>
+                </div>
+
+                <!-- Alerts -->
+                <div id="budgetWarning"
+                    class="alert alert-warning">
+                    ⚠️ <strong>Alerte Budget:</strong>
+                    Moins de 20% du budget restant
+                </div>
+
+                <div id="budgetExceeded"
+                    class="alert alert-danger">
+                    ❌ <strong>Budget dépassé!</strong>
+                    Les requêtes sont bloquées
+                </div>
+
+                <div id="budgetOk"
+                    class="alert alert-success">
+                    ✅ Budget OK
+                </div>
+
+                <!-- Export Section -->
+                <div class="export-section">
+                    <h3>💾 Exporter les données</h3>
+                    <div class="button-group">
+                        <button class="btn-secondary"
+                            onclick="exportJSON()">
+                            📥 JSON
+                        </button>
+                        <button class="btn-secondary"
+                            onclick="exportCSV()">
+                            📥 CSV
+                        </button>
+                    </div>
+                    <button id="refreshBtn"
+                        style="margin-top: 10px;
+                            background: #555;"
+                        onclick="refreshStats()">
+                        🔄 Rafraîchir
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== STATE =====
+        let searchResults = [];
+        let currentStats = null;
+
+        // ===== API CALLS =====
+        async function apiCall(endpoint,
+                method = 'GET', data = null) {
+            try {
+                const options = {
+                    method,
+                    headers: {
+                        'Content-Type':
+                            'application/json'
+                    }
+                };
+                if (data) {
+                    options.body = JSON.stringify(data);
+                }
+
+                const response = await fetch(endpoint,
+                    options);
+                if (!response.ok) {
+                    throw new Error(
+                        `HTTP ${response.status}`
+                    );
+                }
+                return await response.json();
+            } catch (error) {
+                console.error('API Error:', error);
+                showAlert('searchAlert',
+                    `Erreur API: ${error.message}`,
+                    'danger');
+                return null;
+            }
         }
-        
-    } catch (err) {
-        console.error(err);
-        resultsDiv.innerHTML = '<div class="alert alert-error">Error: ' + err.message + '</div>';
-    } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Generate Leads';
-        updateUsageDisplay();
-    }
-});
 
-function exportCSV(leads) {
-    const headers = ['Name', 'Category', 'Address', 'Phone', 'Website', 'Email', 'Rating', 'Reviews'];
-    const rows = leads.map(l => [
-        l.name, l.category, l.address, l.phone || '', 
-        l.website || '', l.email || '', l.rating, l.review_count
-    ]);
-    const csv = [headers, ...rows].map(r => r.map(c => '"' + (c || '') + '"').join(',')).join('\\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'leads_' + new Date().toISOString().split('T')[0] + '.csv';
-    a.click();
-}
+        // ===== SEARCH =====
+        async function performSearch() {
+            const query = document
+                .getElementById('query').value;
+            const location = document
+                .getElementById('location').value;
+            const radius = document
+                .getElementById('radius').value;
 
-function exportJSON(leads) {
-    const json = JSON.stringify(leads, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'leads_' + new Date().toISOString().split('T')[0] + '.json';
-    a.click();
-}
-</script>
+            if (!query || !location) {
+                showAlert('searchAlert',
+                    'Remplissez tous les champs',
+                    'danger');
+                return;
+            }
+
+            showLoader(true);
+
+            const result = await apiCall(
+                '/api/search', 'POST', {
+                    query,
+                    location,
+                    radius: parseInt(radius)
+                });
+
+            showLoader(false);
+
+            if (result && result.success) {
+                searchResults = result.places || [];
+                displayResults(searchResults);
+                showAlert('searchAlert',
+                    `✅ ${searchResults.length}` +
+                        ' résultats trouvés',
+                    'success');
+                refreshStats();
+            } else {
+                showAlert('searchAlert',
+                    result?.error ||
+                        'Erreur lors de la recherche',
+                    'danger');
+            }
+        }
+
+        // ===== DISPLAY =====
+        function displayResults(places) {
+            const container = document
+                .getElementById('results');
+
+            if (!places || places.length === 0) {
+                container.innerHTML =
+                    '<p style="color: ' +
+                    'var(--text-secondary); ' +
+                    'text-align: center; ' +
+                    'padding: 20px;">' +
+                    'Aucun résultat trouvé</p>';
+                return;
+            }
+
+            let html = '';
+            places.forEach((place, i) => {
+                html += `
+                    <div class="result-item">
+                        <strong>${i + 1}. ` +
+                    `${place.name}</strong>
+                        📍 ${place.address}<br>
+                        ${place.rating ?
+                            `⭐ ${place.rating} | ` :
+                            ''}
+                        ${place.phone ||
+                            'Pas de téléphone'}
+                        <br>
+                        <small>${place.types?.join(
+                            ', ') || ''}</small>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        // ===== STATS =====
+        async function refreshStats() {
+            const stats = await apiCall('/api/usage');
+            if (!stats) return;
+
+            currentStats = stats;
+
+            // Update display
+            document.getElementById('totalRequests')
+                .textContent = stats.total_requests;
+            document.getElementById('costUsed')
+                .textContent =
+                    `$${stats.total_cost.toFixed(2)}`;
+            document.getElementById('requestsLeft')
+                .textContent =
+                    stats.requests_remaining;
+            document.getElementById('budgetLeft')
+                .textContent =
+                    `$${stats.budget_remaining
+                        .toFixed(2)}`;
+
+            // Update progress bar
+            const percent = (
+                100 - (stats.budget_remaining /
+                    stats.max_cost_per_month * 100)
+            );
+            document.getElementById('budgetProgress')
+                .style.width =
+                    Math.min(100, Math.max(0,
+                        percent)) + '%';
+
+            // Update alerts
+            document.getElementById('budgetWarning')
+                .classList.remove('show');
+            document.getElementById('budgetExceeded')
+                .classList.remove('show');
+            document.getElementById('budgetOk')
+                .classList.remove('show');
+
+            if (stats.budget_exceeded) {
+                document
+                    .getElementById('budgetExceeded')
+                    .classList.add('show');
+                document.getElementById('searchBtn')
+                    .disabled = true;
+            } else if (stats.budget_remaining <
+                stats.max_cost_per_month * 0.2) {
+                document
+                    .getElementById('budgetWarning')
+                    .classList.add('show');
+                document.getElementById('searchBtn')
+                    .disabled = false;
+            } else {
+                document.getElementById('budgetOk')
+                    .classList.add('show');
+                document.getElementById('searchBtn')
+                    .disabled = false;
+            }
+        }
+
+        // ===== EXPORT =====
+        async function exportJSON() {
+            if (!searchResults.length) {
+                alert('Aucun résultat à exporter');
+                return;
+            }
+
+            const data = {
+                timestamp: new Date()
+                    .toISOString(),
+                results_count: searchResults.length,
+                results: searchResults,
+                stats: currentStats
+            };
+
+            const blob = new Blob(
+                [JSON.stringify(data, null, 2)],
+                { type: 'application/json' });
+            downloadFile(blob, 'leads.json');
+        }
+
+        async function exportCSV() {
+            if (!searchResults.length) {
+                alert('Aucun résultat à exporter');
+                return;
+            }
+
+            let csv =
+                'Name,Address,Rating,Phone\n';
+            searchResults.forEach(place => {
+                const name = `"${place.name}"`;
+                const address =
+                    `"${place.address}"`;
+                const rating = place.rating || '';
+                const phone = place.phone || '';
+                csv += `${name},${address},` +
+                    `${rating},${phone}\n`;
+            });
+
+            const blob = new Blob([csv],
+                { type: 'text/csv' });
+            downloadFile(blob, 'leads.csv');
+        }
+
+        function downloadFile(blob, filename) {
+            const url =
+                URL.createObjectURL(blob);
+            const a = document
+                .createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // ===== UI HELPERS =====
+        function showAlert(id, message, type) {
+            const el = document.getElementById(id);
+            el.className =
+                `alert alert-${type} show`;
+            el.textContent = message;
+            setTimeout(() =>
+                el.classList.remove('show'),
+                5000);
+        }
+
+        function showLoader(show) {
+            document.getElementById('loader')
+                .classList.toggle('show', show);
+        }
+
+        // ===== INIT =====
+        document.addEventListener(
+            'DOMContentLoaded', () => {
+                refreshStats();
+                setInterval(refreshStats, 5000);
+            });
+
+        // Auto-search on Enter
+        document.getElementById('query')
+            .addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    performSearch();
+                }
+            });
+    </script>
 </body>
 </html>
 """
 
-# ============================================================================
-# ROUTES
-# ============================================================================
 
-@app.route("/", methods=["GET"])
+# ============================================================
+# ROUTES - API ENDPOINTS
+# ============================================================
+
+@app.route('/')
 def index():
-    """Serve main HTML interface."""
+    """Serve the HTML interface."""
     return render_template_string(HTML_TEMPLATE)
 
 
-@app.route("/api/usage", methods=["GET"])
-def api_usage():
-    """Get current API usage statistics."""
-    usage = tracker.get_current_usage()
-    return jsonify(usage)
-
-
-@app.route("/api/scrape", methods=["POST"])
-def api_scrape():
+@app.route('/api/search', methods=['POST'])
+def search_leads():
     """
-    Scrape Google Maps leads with budget protection.
-    
-    Request JSON:
-        {
-            "query": "plumber",
-            "location": "Rennes"
-        }
-    
-    Response JSON:
-        {
-            "query": "plumber",
-            "location": "Rennes",
-            "leads": [...]  OR  "error": "message"
-        }
+    Search for leads using Google Places API.
+
+    Expected JSON payload:
+    {
+        "query": "plombiers",
+        "location": "48.8566, 2.3522",
+        "radius": 5
+    }
     """
     try:
-        # Parse request
-        data = request.get_json(force=True)
-        query = data.get("query", "").strip()
-        location = data.get("location", "").strip()
+        # Get request data
+        data = request.get_json()
+        query = data.get('query', '').strip()
+        location_str = data.get('location',
+                                '').strip()
+        radius = data.get('radius', 5)
 
-        if not query or not location:
-            tracker.log_failed_request("Missing query or location")
-            return jsonify({"error": "Missing 'query' or 'location'"}), 400
+        if not query or not location_str:
+            return jsonify({
+                "success": False,
+                "error": "Query and location required"
+            }), 400
 
-        # Check budget BEFORE making API call
-        can_request, reason = tracker.can_make_request()
-        if not can_request:
-            tracker.log_failed_request("Budget exceeded")
-            return jsonify({"error": reason}), 429
+        # Parse location (lat,lng format)
+        try:
+            lat, lng = map(float,
+                           location_str.split(','))
+        except (ValueError, IndexError):
+            return jsonify({
+                "success": False,
+                "error": "Invalid location format"
+            }), 400
 
-        # ===== REPLACE THIS WITH REAL GOOGLE PLACES API CALL =====
-        # This is mock data for now
-        leads = generate_mock_leads(query, location)
-        
-        # Log successful request
-        tracker.log_request(
-            endpoint="search_nearby",
-            query_type=query,
-            success=True,
-            notes=f"Location: {location}"
-        )
+        # Check budget before proceeding
+        if tracker.is_budget_exceeded():
+            return jsonify({
+                "success": False,
+                "error": "Budget exceeded"
+            }), 429
+
+        # Track request
+        tracker.log_request()
+
+        # Here you would call Google Places API
+        # For demo, return mock data
+        mock_places = [
+            {
+                "name": f"Business {i}",
+                "address": f"{i} Main St",
+                "rating": 4.5 + (i % 2) * 0.3,
+                "phone": "01 23 45 67 89",
+                "types": ["plumber", "service"]
+            }
+            for i in range(1, 6)
+        ]
 
         return jsonify({
-            "query": query,
-            "location": location,
-            "leads": leads,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "success": True,
+            "places": mock_places,
+            "count": len(mock_places)
         })
 
     except Exception as e:
-        logger.error(f"API error: {str(e)}")
-        tracker.log_failed_request(f"Exception: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+        logger.error(f"Search error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
-@app.route("/api/usage/history", methods=["GET"])
-def api_usage_history():
-    """Get usage history (last 12 months)."""
-    history = tracker.get_monthly_history(12)
-    return jsonify({"history": history})
+@app.route('/api/usage', methods=['GET'])
+def get_usage():
+    """Get current usage and budget stats."""
+    try:
+        stats = tracker.get_stats()
+        return jsonify({
+            "success": True,
+            "total_requests": stats['total_requests'],
+            "total_cost": stats['total_cost'],
+            "requests_remaining":
+                stats['requests_remaining'],
+            "budget_remaining":
+                stats['budget_remaining'],
+            "budget_exceeded":
+                tracker.is_budget_exceeded(),
+            "max_cost_per_month":
+                stats['max_cost_per_month']
+        })
+    except Exception as e:
+        logger.error(f"Usage error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
-@app.route("/api/usage/log", methods=["GET"])
-def api_usage_log():
-    """Get detailed request log (last 100 entries)."""
-    limit = request.args.get("limit", 100, type=int)
-    log = tracker.get_detailed_log(limit)
-    return jsonify({"log": log})
-
-
-@app.route("/health", methods=["GET"])
-def health():
-    """Health check endpoint."""
-    return jsonify({
-        "status": "ok",
-        "service": "Google Maps Lead Scraper",
-        "version": "2.0",
-        "budget_tracking": "enabled"
-    }), 200
-
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def generate_mock_leads(query: str, location: str, count: int = 5) -> list:
-    """
-    Generate mock lead data.
-    
-    TODO: Replace with real Google Places API calls
-    
-    Args:
-        query: Business type
-        location: Geographic location
-        count: Number of leads
-    
-    Returns:
-        List of lead dicts
-    """
-    leads_data = [
-        {
-            "name": f"{query.title()} Alpha - {location}",
-            "address": f"12 Rue des Exemples, {location}",
-            "phone": "+33 2 99 00 00 01",
-            "website": "https://example-alpha.com",
-            "email": "contact@example-alpha.com",
-            "rating": 4.7,
-            "review_count": 128,
-            "category": query.title()
-        },
-        {
-            "name": f"{query.title()} Beta - {location}",
-            "address": f"5 Avenue de la Démo, {location}",
-            "phone": "+33 2 99 00 00 02",
-            "website": "",
-            "email": "",
-            "rating": 4.3,
-            "review_count": 54,
-            "category": query.title()
-        },
-        {
-            "name": f"{query.title()} Gamma - {location}",
-            "address": f"Place Centrale, {location}",
-            "phone": "",
-            "website": "https://example-gamma.fr",
-            "email": "hello@example-gamma.fr",
-            "rating": 4.9,
-            "review_count": 212,
-            "category": query.title()
-        },
-        {
-            "name": f"{query.title()} Delta - {location}",
-            "address": f"Parc de la Innovation, {location}",
-            "phone": "+33 2 99 00 00 04",
-            "website": "https://example-delta.com",
-            "email": "info@example-delta.com",
-            "rating": 4.2,
-            "review_count": 87,
-            "category": query.title()
-        },
-        {
-            "name": f"{query.title()} Epsilon - {location}",
-            "address": f"Zone Industrielle Nord, {location}",
-            "phone": "",
-            "website": "",
-            "email": "contact@example-epsilon.fr",
-            "rating": 3.9,
-            "review_count": 32,
-            "category": query.title()
-        }
-    ]
-    
-    return leads_data[:count]
-
-
-# ============================================================================
+# ============================================================
 # ERROR HANDLERS
-# ============================================================================
+# ============================================================
 
 @app.errorhandler(404)
 def not_found(error):
-    return jsonify({"error": "Endpoint not found"}), 404
+    """Handle 404 errors."""
+    return jsonify({
+        "success": False,
+        "error": "Not found"
+    }), 404
 
 
 @app.errorhandler(500)
 def server_error(error):
-    return jsonify({"error": "Internal server error"}), 500
+    """Handle 500 errors."""
+    return jsonify({
+        "success": False,
+        "error": "Server error"
+    }), 500
 
 
-# ============================================================================
+# ============================================================
 # MAIN
-# ============================================================================
+# ============================================================
 
-if __name__ == "__main__":
-    # For production, use Gunicorn instead
-    debug_mode = os.getenv("FLASK_DEBUG", "False") == "True"
+if __name__ == '__main__':
+    # Get config from environment
+    debug_mode = os.getenv('DEBUG', 'False') == 'True'
+    port = int(os.getenv('PORT', 5000))
+
+    # Run server
     app.run(
-        debug=debug_mode,
-        host=os.getenv("FLASK_HOST", "127.0.0.1"),
-        port=int(os.getenv("FLASK_PORT", 5000))
+        host='0.0.0.0',
+        port=port,
+        debug=debug_mode
     )

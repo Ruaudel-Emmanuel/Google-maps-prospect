@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Google Maps Lead Scraper – Complete Flask App with Budget Tracking
+Google Maps Lead Scraper with Budget Tracking & Error Handling.
 
 Features:
 - Beautiful dark-themed HTML interface
@@ -9,24 +9,27 @@ Features:
 - CSV & JSON export
 - Real-time usage dashboard
 - GDPR-compliant
+- CITY-BASED SEARCH (pas de GPS)
+- Comprehensive error handling
+- Debug logging enabled
 
-Author: Your Name
+Author: Reconversion Python Full Stack
 License: MIT
-Created: 2026-01-15
+Created: 2026-01-17
 
 IMPORTANT: This app uses Google Places API.
 - Set GOOGLE_PLACES_API_KEY in .env
 - Monitor usage via /api/usage endpoint
 - App automatically blocks requests when budget is reached
 """
+
 import os
 import logging
+import json
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 from dotenv import load_dotenv
-
-# Import our usage tracker module
-from usage_tracker import create_tracker
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -35,21 +38,261 @@ load_dotenv()
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 
-# Initialize usage tracker with limits
-TRACKER_CONFIG = {
-    "max_requests_per_month": int(
-        os.getenv("MAX_REQUESTS_PER_MONTH", 20000)
-    ),
-    "max_cost_per_month": float(
-        os.getenv("MAX_COST_PER_MONTH", 180.0)
-    ),
-    "cost_per_request": float(os.getenv("COST_PER_REQUEST", 0.009))
-}
-tracker = create_tracker(TRACKER_CONFIG)
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# ============================================================
+# LOGGING CONFIGURATION
+# ============================================================
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY")
+GEOCODING_API_KEY = os.getenv("GEOCODING_API_KEY", GOOGLE_PLACES_API_KEY)
+
+# Validate API keys
+if not GOOGLE_PLACES_API_KEY:
+    logger.warning("⚠️ GOOGLE_PLACES_API_KEY not set in .env file!")
+if not GEOCODING_API_KEY:
+    logger.warning("⚠️ GEOCODING_API_KEY not set in .env file!")
+
+logger.info("🚀 Application initialization started...")
+
+# ============================================================
+# USAGE TRACKER
+# ============================================================
+class UsageTracker:
+    """Track API usage and enforce budget limits."""
+
+    def __init__(self, max_requests_per_month=20000, max_cost_per_month=180.0, cost_per_request=0.009):
+        self.max_requests_per_month = max_requests_per_month
+        self.max_cost_per_month = max_cost_per_month
+        self.cost_per_request = cost_per_request
+        self.requests_this_month = 0
+        self.cost_this_month = 0.0
+        self.usage_file = "usage_log.json"
+        self._load_usage()
+
+    def _load_usage(self):
+        """Load usage from file if exists and is current month."""
+        if os.path.exists(self.usage_file):
+            try:
+                with open(self.usage_file, 'r') as f:
+                    data = json.load(f)
+                month_key = datetime.now().strftime("%Y-%m")
+                if month_key == data.get("month"):
+                    self.requests_this_month = data.get("requests", 0)
+                    self.cost_this_month = data.get("cost", 0.0)
+                    msg = (
+                        f"✅ Usage loaded: "
+                        f"{self.requests_this_month} requests, "
+                        f"${self.cost_this_month:.2f}"
+                    )
+                    logger.info(msg)
+                else:
+                    logger.info(
+                        "📅 New month detected - resetting tracker"
+                    )
+            except Exception as e:
+                logger.error(f"❌ Error loading usage: {e}")
+
+    def _save_usage(self):
+        """Save usage to file."""
+        try:
+            month_key = datetime.now().strftime("%Y-%m")
+            data = {
+                "month": month_key,
+                "requests": self.requests_this_month,
+                "cost": self.cost_this_month
+            }
+            with open(self.usage_file, 'w') as f:
+                json.dump(data, f)
+            logger.debug(
+                f"💾 Usage saved: {self.requests_this_month} "
+                "requests"
+            )
+        except Exception as e:
+            logger.error(f"❌ Error saving usage: {e}")
+
+    def add_request(self):
+        """Add a request to the tracker."""
+        self.requests_this_month += 1
+        self.cost_this_month += self.cost_per_request
+        self._save_usage()
+
+    def can_make_request(self):
+        """Check if we can make another request."""
+        can_request = (
+            self.requests_this_month < self.max_requests_per_month
+            and self.cost_this_month < self.max_cost_per_month
+        )
+        if not can_request:
+            logger.warning(
+                f"⚠️ Budget limit reached! "
+                f"Requests: {self.requests_this_month}"
+                f"/{self.max_requests_per_month}, "
+                f"Cost: ${self.cost_this_month:.2f}"
+                f"/${self.max_cost_per_month}"
+            )
+        return can_request
+
+    def get_usage_percentage(self):
+        """Get usage as percentage."""
+        if self.max_requests_per_month > 0:
+            requests_pct = (
+                self.requests_this_month / self.max_requests_per_month * 100
+            )
+        else:
+            requests_pct = 0
+
+        if self.max_cost_per_month > 0:
+            cost_pct = (
+                self.cost_this_month / self.max_cost_per_month * 100
+            )
+        else:
+            cost_pct = 0
+
+        return max(requests_pct, cost_pct)
+
+
+tracker = UsageTracker()
+
+# ============================================================
+# GEOCODING & PLACES FUNCTIONS
+# ============================================================
+def get_city_coordinates(city_name):
+    """Convert city name to coordinates using Google Geocoding API."""
+    try:
+        if not GEOCODING_API_KEY:
+            logger.error("❌ GEOCODING_API_KEY not configured")
+            return None
+
+        url = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            "address": city_name,
+            "key": GEOCODING_API_KEY
+        }
+
+        logger.info(f"🔍 Geocoding city: {city_name}")
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if data.get("status") == "OK" and data.get("results"):
+            location = data["results"][0]["geometry"]["location"]
+            result = {
+                "lat": location["lat"],
+                "lng": location["lng"],
+                "formatted_address": data["results"][0][
+                    "formatted_address"
+                ]
+            }
+            logger.info(f"✅ Found city coordinates: {result}")
+            return result
+        else:
+            logger.warning(
+                f"⚠️ Geocoding failed for '{city_name}': "
+                f"{data.get('status')}"
+            )
+            return None
+
+    except requests.exceptions.Timeout:
+        logger.error(f"❌ Geocoding timeout for '{city_name}'")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Request error during geocoding: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Unexpected error geocoding city: {e}")
+        return None
+
+
+def search_places(city_name, business_type, radius=5000):
+    """Search for places in a city using Google Places API."""
+    try:
+        if not tracker.can_make_request():
+            error_msg = "Budget exceeded this month"
+            logger.warning(f"❌ {error_msg}")
+            return {"error": error_msg, "code": "BUDGET_EXCEEDED"}
+
+        if not GOOGLE_PLACES_API_KEY:
+            error_msg = "Google Places API key not configured"
+            logger.error(f"❌ {error_msg}")
+            return {"error": error_msg, "code": "API_KEY_MISSING"}
+
+        # First, get coordinates from city name
+        logger.info(
+            f"🏙️ Starting search for: {city_name}, "
+            f"type: {business_type}, radius: {radius}m"
+        )
+
+        city_coords = get_city_coordinates(city_name)
+        if not city_coords:
+            error_msg = f"Could not find city: {city_name}"
+            logger.warning(f"⚠️ {error_msg}")
+            return {"error": error_msg, "code": "CITY_NOT_FOUND"}
+
+        # Search places
+        url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+        params = {
+            "location": f"{city_coords['lat']},{city_coords['lng']}",
+            "radius": radius,
+            "type": business_type,
+            "key": GOOGLE_PLACES_API_KEY
+        }
+
+        logger.info("🔎 Searching Google Places API...")
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+
+        tracker.add_request()
+
+        data = response.json()
+
+        if data.get("status") == "OK":
+            results = []
+            for place in data.get("results", []):
+                results.append({
+                    "name": place.get("name"),
+                    "address": place.get("vicinity"),
+                    "lat": place["geometry"]["location"]["lat"],
+                    "lng": place["geometry"]["location"]["lng"],
+                    "rating": place.get("rating", "N/A"),
+                    "place_id": place.get("place_id")
+                })
+
+            logger.info(f"✅ Found {len(results)} places")
+            return {
+                "city": city_coords["formatted_address"],
+                "results": results,
+                "usage": {
+                    "requests": tracker.requests_this_month,
+                    "cost": f"${tracker.cost_this_month:.2f}",
+                    "budget_used": f"{tracker.get_usage_percentage():.1f}%"
+                }
+            }
+        else:
+            error_msg = f"Places API error: {data.get('status')}"
+            logger.error(f"❌ {error_msg}")
+            return {"error": error_msg, "code": data.get('status')}
+
+    except requests.exceptions.Timeout:
+        error_msg = "Request timeout - Google API took too long"
+        logger.error(f"❌ {error_msg}")
+        return {"error": error_msg, "code": "TIMEOUT"}
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Network error: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        return {"error": error_msg, "code": "NETWORK_ERROR"}
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        return {"error": error_msg, "code": "UNKNOWN_ERROR"}
+
 
 # ============================================================
 # HTML TEMPLATE
@@ -59,9 +302,8 @@ HTML_TEMPLATE = """
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport"
-        content="width=device-width, initial-scale=1.0">
-    <title>Google Maps Lead Scraper - Desktop Edition</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prospecteur Google Maps - Recherche par Ville</title>
     <style>
         * {
             margin: 0;
@@ -69,27 +311,12 @@ HTML_TEMPLATE = """
             box-sizing: border-box;
         }
 
-        :root {
-            --primary: #16a085;
-            --primary-hover: #138d75;
-            --bg-dark: #1e1e2e;
-            --bg-card: #16213e;
-            --bg-input: #1a1a2e;
-            --text-main: #e0e0e0;
-            --text-secondary: #999;
-            --alert-warning: #ffc107;
-            --alert-danger: #f44336;
-            --alert-success: #4caf50;
-        }
-
         body {
-            font-family: -apple-system, BlinkMacSystemFont,
-                'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1e1e2e 0%,
-                #0f3460 100%);
-            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
+            color: #333;
         }
 
         .container {
@@ -97,107 +324,92 @@ HTML_TEMPLATE = """
             margin: 0 auto;
         }
 
-        .header {
-            background: linear-gradient(135deg, #0f3460 0%,
-                #16a085 100%);
-            padding: 30px;
-            border-radius: 12px 12px 0 0;
+        header {
             text-align: center;
-            margin-bottom: 0;
-        }
-
-        .header h1 {
-            font-size: 2.2em;
-            margin-bottom: 10px;
             color: white;
+            margin-bottom: 30px;
         }
 
-        .header p {
-            font-size: 1em;
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .subtitle {
+            font-size: 1.1em;
             opacity: 0.9;
-            color: rgba(255, 255, 255, 0.9);
         }
 
-        .content {
+        .main-content {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 0;
-            background: var(--bg-card);
-            border-radius: 0 0 12px 12px;
-            overflow: hidden;
-            min-height: 600px;
+            gap: 20px;
+            margin-bottom: 30px;
         }
 
-        .panel {
-            padding: 30px;
-            border-right: 1px solid rgba(22, 160, 133, 0.2);
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
         }
 
-        .panel:last-child {
-            border-right: none;
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
         }
 
-        .panel h2 {
-            color: var(--primary);
+        .card h2 {
+            color: #667eea;
             margin-bottom: 20px;
-            font-size: 1.4em;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
         }
 
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
 
         label {
             display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            font-size: 0.95em;
-            color: var(--text-main);
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
         }
 
-        input[type="text"],
-        input[type="number"],
-        select {
+        input, select {
             width: 100%;
             padding: 12px;
-            background: var(--bg-input);
-            border: 1px solid rgba(22, 160, 133, 0.3);
-            border-radius: 6px;
-            color: var(--text-main);
+            border: 1px solid #ddd;
+            border-radius: 5px;
             font-size: 1em;
-            transition: all 0.3s ease;
+            transition: border-color 0.3s;
         }
 
-        input:focus,
-        select:focus {
+        input:focus, select:focus {
             outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 8px rgba(22, 160, 133, 0.4);
-            background: rgba(22, 160, 133, 0.1);
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
 
         button {
             width: 100%;
-            padding: 14px;
-            background: var(--primary);
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            border-radius: 6px;
+            border-radius: 5px;
             font-size: 1em;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
-            margin-bottom: 10px;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
 
         button:hover {
-            background: var(--primary-hover);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px
-                rgba(22, 160, 133, 0.3);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
 
         button:active {
@@ -205,161 +417,18 @@ HTML_TEMPLATE = """
         }
 
         button:disabled {
-            background: #555;
+            opacity: 0.6;
             cursor: not-allowed;
-            transform: none;
         }
 
-        .btn-secondary {
-            background: #1e6f5c;
-        }
-
-        .btn-secondary:hover {
-            background: #155a49;
-        }
-
-        /* Search Results */
-        .results-container {
-            margin-top: 20px;
-            max-height: 350px;
-            overflow-y: auto;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 6px;
-            padding: 15px;
-        }
-
-        .result-item {
-            background: rgba(22, 160, 133, 0.1);
-            border-left: 3px solid var(--primary);
-            padding: 12px;
-            margin-bottom: 10px;
-            border-radius: 4px;
-            font-size: 0.9em;
-        }
-
-        .result-item strong {
-            color: var(--primary);
-            display: block;
-            margin-bottom: 5px;
-        }
-
-        .result-item small {
-            color: var(--text-secondary);
-        }
-
-        /* Stats */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .stat-card {
-            background: rgba(22, 160, 133, 0.1);
-            border: 1px solid rgba(22, 160, 133, 0.3);
-            border-radius: 6px;
-            padding: 15px;
-            text-align: center;
-        }
-
-        .stat-value {
-            font-size: 1.8em;
-            font-weight: bold;
-            color: var(--primary);
-            margin-bottom: 5px;
-        }
-
-        .stat-label {
-            font-size: 0.85em;
-            color: var(--text-secondary);
-        }
-
-        /* Progress Bar */
-        .progress-bar {
-            width: 100%;
-            height: 8px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 4px;
-            overflow: hidden;
-            margin-bottom: 15px;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--primary),
-                var(--primary-hover));
-            transition: width 0.3s ease;
-        }
-
-        /* Alerts */
-        .alert {
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 15px;
-            border-left: 4px solid;
-            display: none;
-        }
-
-        .alert.show {
-            display: block;
-        }
-
-        .alert-warning {
-            background: rgba(255, 193, 7, 0.1);
-            border-color: var(--alert-warning);
-            color: var(--alert-warning);
-        }
-
-        .alert-danger {
-            background: rgba(244, 67, 54, 0.1);
-            border-color: var(--alert-danger);
-            color: var(--alert-danger);
-        }
-
-        .alert-success {
-            background: rgba(76, 175, 80, 0.1);
-            border-color: var(--alert-success);
-            color: var(--alert-success);
-        }
-
-        /* Export Section */
-        .export-section {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid rgba(22, 160, 133, 0.2);
-        }
-
-        .export-section h3 {
-            color: var(--primary);
-            margin-bottom: 15px;
-            font-size: 1.1em;
-        }
-
-        .button-group {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-        }
-
-        .button-group button {
-            margin-bottom: 0;
-        }
-
-        /* Loader */
-        .loader {
-            display: none;
-            border: 3px solid rgba(22, 160, 133, 0.3);
-            border-top: 3px solid var(--primary);
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
             border-radius: 50%;
-            width: 30px;
-            height: 30px;
+            width: 40px;
+            height: 40px;
             animation: spin 1s linear infinite;
-            margin: 10px auto;
-        }
-
-        .loader.show {
-            display: block;
+            margin: 0 auto 10px;
         }
 
         @keyframes spin {
@@ -367,606 +436,461 @@ HTML_TEMPLATE = """
             100% { transform: rotate(360deg); }
         }
 
-        /* Responsive */
-        @media (max-width: 768px) {
-            .content {
-                grid-template-columns: 1fr;
-            }
-
-            .panel {
-                border-right: none;
-                border-bottom: 1px solid
-                    rgba(22, 160, 133, 0.2);
-            }
-
-            .panel:last-child {
-                border-bottom: none;
-            }
-
-            .header h1 {
-                font-size: 1.6em;
-            }
-
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
+        .results {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
         }
 
-        /* Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
+        .results h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
         }
 
-        ::-webkit-scrollbar-track {
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 4px;
+        .place-item {
+            border: 1px solid #eee;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            background: #f9f9f9;
+            transition: all 0.3s;
         }
 
-        ::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
+        .place-item:hover {
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
         }
 
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--primary-hover);
+        .place-name {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .place-address {
+            color: #666;
+            font-size: 0.95em;
+            margin-bottom: 8px;
+        }
+
+        .place-rating {
+            color: #ffc107;
+            font-weight: 600;
+        }
+
+        .place-coords {
+            font-size: 0.85em;
+            color: #999;
+            margin-top: 10px;
+            font-family: monospace;
+        }
+
+        .usage-info {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .usage-bar {
+            width: 100%;
+            height: 25px;
+            background: #eee;
+            border-radius: 5px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .usage-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.8em;
+            font-weight: 600;
+        }
+
+        .error {
+            background: #f8d7da;
+            border: 2px solid #f5c6cb;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .export-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .export-buttons button {
+            flex: 1;
+        }
+
+        .hidden {
+            display: none;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🗺️ Google Maps Lead Scraper</h1>
-            <p>Prospecter sur Google Maps avec protection
-                budgétaire</p>
-        </div>
+        <header>
+            <h1>Prospecteur Google Maps</h1>
+            <p class="subtitle">Recherche de prospects par ville sans GPS</p>
+        </header>
 
-        <div class="content">
-            <!-- Panel Gauche: Recherche -->
-            <div class="panel">
-                <h2>🔍 Recherche de prospects</h2>
+        <div class="main-content">
+            <div class="card">
+                <h2>Parametres de recherche</h2>
+                <form id="searchForm">
+                    <div class="form-group">
+                        <label for="cityName">Ville</label>
+                        <input type="text" id="cityName" placeholder="Ex: Paris, Rennes, Lyon..." required>
+                    </div>
 
-                <div class="form-group">
-                    <label for="query">Requête de
-                        recherche</label>
-                    <input type="text" id="query"
-                        placeholder="ex: plombiers,
-                            électriciens...">
-                </div>
+                    <div class="form-group">
+                        <label for="businessType">Type de commerce</label>
+                        <select id="businessType" required>
+                            <option value="">-- Selectionner --</option>
+                            <option value="restaurant">Restaurant</option>
+                            <option value="cafe">Cafe</option>
+                            <option value="hotel">Hotel</option>
+                            <option value="bar">Bar</option>
+                            <option value="florist">Fleuriste</option>
+                            <option value="grocery_or_supermarket">Supermarche</option>
+                            <option value="shopping_mall">Centre commercial</option>
+                            <option value="bakery">Boulangerie</option>
+                            <option value="pharmacy">Pharmacie</option>
+                            <option value="park">Parc</option>
+                            <option value="police">Police</option>
+                            <option value="library">Bibliotheque</option>
+                            <option value="gas_station">Station-service</option>
+                            <option value="gym">Salle de sport</option>
+                            <option value="dentist">Dentiste</option>
+                        </select>
+                    </div>
 
-                <div class="form-group">
-                    <label for="location">Localisation
-                        (GPS)</label>
-                    <input type="text" id="location"
-                        placeholder="48.8566, 2.3522"
-                        value="48.8566, 2.3522">
-                </div>
+                    <div class="form-group">
+                        <label for="radius">Rayon de recherche (m)</label>
+                        <input type="number" id="radius" value="5000" min="500" max="50000" step="500">
+                    </div>
 
-                <div class="form-group">
-                    <label for="radius">Rayon (km)</label>
-                    <input type="number" id="radius"
-                        min="1" max="50" value="5">
-                </div>
-
-                <button id="searchBtn"
-                    onclick="performSearch()">
-                    🔍 Rechercher et Scraper
-                </button>
-
-                <div class="loader" id="loader"></div>
-
-                <div id="searchAlert" class="alert"></div>
-
-                <div class="results-container" id="results">
-                    <p style="color: var(--text-secondary);
-                        text-align: center; padding: 20px;">
-                        Aucun résultat pour le moment
-                    </p>
-                </div>
+                    <button type="submit" id="submitBtn">Rechercher</button>
+                </form>
             </div>
 
-            <!-- Panel Droit: Stats et Export -->
-            <div class="panel">
-                <h2>📊 Utilisation & Limites</h2>
-
-                <!-- Stats -->
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-value"
-                            id="totalRequests">0
-                        </div>
-                        <div class="stat-label">
-                            Requêtes ce mois
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="costUsed">
-                            $0.00
-                        </div>
-                        <div class="stat-label">
-                            Coût utilisé
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value"
-                            id="requestsLeft">
-                            20000
-                        </div>
-                        <div class="stat-label">
-                            Requêtes restantes
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="budgetLeft">
-                            $180.00
-                        </div>
-                        <div class="stat-label">
-                            Budget restant
-                        </div>
-                    </div>
+            <div class="usage-info">
+                <h2>Utilisation du budget</h2>
+                <div id="usageContent">
+                    <p>Chargement...</p>
                 </div>
+            </div>
+        </div>
 
-                <!-- Progress Bar -->
-                <div class="progress-bar">
-                    <div class="progress-fill"
-                        id="budgetProgress"
-                        style="width: 0%;">
-                    </div>
-                </div>
-
-                <!-- Alerts -->
-                <div id="budgetWarning"
-                    class="alert alert-warning">
-                    ⚠️ <strong>Alerte Budget:</strong>
-                    Moins de 20% du budget restant
-                </div>
-
-                <div id="budgetExceeded"
-                    class="alert alert-danger">
-                    ❌ <strong>Budget dépassé!</strong>
-                    Les requêtes sont bloquées
-                </div>
-
-                <div id="budgetOk"
-                    class="alert alert-success">
-                    ✅ Budget OK
-                </div>
-
-                <!-- Export Section -->
-                <div class="export-section">
-                    <h3>💾 Exporter les données</h3>
-                    <div class="button-group">
-                        <button class="btn-secondary"
-                            onclick="exportJSON()">
-                            📥 JSON
-                        </button>
-                        <button class="btn-secondary"
-                            onclick="exportCSV()">
-                            📥 CSV
-                        </button>
-                    </div>
-                    <button id="refreshBtn"
-                        style="margin-top: 10px;
-                            background: #555;"
-                        onclick="refreshStats()">
-                        🔄 Rafraîchir
-                    </button>
-                </div>
+        <div class="results hidden" id="results">
+            <h2>Resultats de recherche</h2>
+            <div id="errorMessage" class="error hidden"></div>
+            <div id="resultsList"></div>
+            <div class="export-buttons" id="exportButtons" style="display: none;">
+                <button onclick="exportJSON()">Exporter en JSON</button>
+                <button onclick="exportCSV()">Exporter en CSV</button>
             </div>
         </div>
     </div>
 
     <script>
-        // ===== STATE =====
-        let searchResults = [];
-        let currentStats = null;
+        let lastResults = null;
 
-        // ===== API CALLS =====
-        async function apiCall(endpoint,
-                method = 'GET', data = null) {
-            try {
-                const options = {
-                    method,
-                    headers: {
-                        'Content-Type':
-                            'application/json'
-                    }
-                };
-                if (data) {
-                    options.body = JSON.stringify(data);
-                }
+        updateUsage();
+        setInterval(updateUsage, 5000);
 
-                const response = await fetch(endpoint,
-                    options);
-                if (!response.ok) {
-                    throw new Error(
-                        `HTTP ${response.status}`
-                    );
-                }
-                return await response.json();
-            } catch (error) {
-                console.error('API Error:', error);
-                showAlert('searchAlert',
-                    `Erreur API: ${error.message}`,
-                    'danger');
-                return null;
-            }
-        }
+        document.getElementById('searchForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
 
-        // ===== SEARCH =====
-        async function performSearch() {
-            const query = document
-                .getElementById('query').value;
-            const location = document
-                .getElementById('location').value;
-            const radius = document
-                .getElementById('radius').value;
+            const city = document.getElementById('cityName').value.trim();
+            const businessType = document.getElementById('businessType').value;
+            const radius = document.getElementById('radius').value;
+            const submitBtn = document.getElementById('submitBtn');
 
-            if (!query || !location) {
-                showAlert('searchAlert',
-                    'Remplissez tous les champs',
-                    'danger');
+            if (!city) {
+                showError('Veuillez entrer un nom de ville');
                 return;
             }
 
-            showLoader(true);
+            if (!businessType) {
+                showError('Veuillez selectionner un type de commerce');
+                return;
+            }
 
-            const result = await apiCall(
-                '/api/search', 'POST', {
-                    query,
-                    location,
-                    radius: parseInt(radius)
+            // ✅ FIX: Removed reference to non-existent 'loading' element
+            document.getElementById('results').classList.add('hidden');
+            submitBtn.disabled = true;
+
+            try {
+                console.log('Sending request:', city, businessType, radius);
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        city: city,
+                        businesstype: businessType,
+                        radius: parseInt(radius)
+                    })
                 });
 
-            showLoader(false);
+                const data = await response.json();
+                console.log('Response:', data);
 
-            if (result && result.success) {
-                searchResults = result.places || [];
-                displayResults(searchResults);
-                showAlert('searchAlert',
-                    `✅ ${searchResults.length}` +
-                        ' résultats trouvés',
-                    'success');
-                refreshStats();
-            } else {
-                showAlert('searchAlert',
-                    result?.error ||
-                        'Erreur lors de la recherche',
-                    'danger');
+                submitBtn.disabled = false;
+
+                if (data.error) {
+                    showError(data.error);
+                } else {
+                    lastResults = data;
+                    displayResults(data);
+                    updateUsage();
+                }
+            } catch (error) {
+                submitBtn.disabled = false;
+                console.error('Network error:', error);
+                showError('Erreur reseau: ' + error.message);
             }
-        }
+        });
 
-        // ===== DISPLAY =====
-        function displayResults(places) {
-            const container = document
-                .getElementById('results');
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            const resultsList = document.getElementById('resultsList');
+            const errorDiv = document.getElementById('errorMessage');
+            const exportButtons = document.getElementById('exportButtons');
 
-            if (!places || places.length === 0) {
-                container.innerHTML =
-                    '<p style="color: ' +
-                    'var(--text-secondary); ' +
-                    'text-align: center; ' +
-                    'padding: 20px;">' +
-                    'Aucun résultat trouvé</p>';
+            errorDiv.classList.add('hidden');
+            resultsList.innerHTML = '';
+            exportButtons.style.display = 'none';
+
+            if (!data.results || data.results.length === 0) {
+                errorDiv.classList.remove('hidden');
+                errorDiv.innerHTML = 'Aucun resultat trouve pour cette recherche.';
+                resultsDiv.classList.add('hidden');
                 return;
             }
 
-            let html = '';
-            places.forEach((place, i) => {
+            let html = `<p style="color: #667eea; font-weight: 600; margin-bottom: 15px;">${data.results.length} resultats trouves pour <strong>${data.city}</strong></p>`;
+
+            data.results.forEach(function(place, index) {
                 html += `
-                    <div class="result-item">
-                        <strong>${i + 1}. ` +
-                    `${place.name}</strong>
-                        📍 ${place.address}<br>
-                        ${place.rating ?
-                            `⭐ ${place.rating} | ` :
-                            ''}
-                        ${place.phone ||
-                            'Pas de téléphone'}
-                        <br>
-                        <small>${place.types?.join(
-                            ', ') || ''}</small>
+                    <div class="place-item">
+                        <div class="place-name">${index + 1}. ${place.name}</div>
+                        <div class="place-address">Adresse: ${place.address}</div>
+                        <div class="place-rating">Note: ${place.rating}</div>
+                        <div class="place-coords">Lat: ${place.lat.toFixed(4)}, Lng: ${place.lng.toFixed(4)}</div>
                     </div>
                 `;
             });
-            container.innerHTML = html;
+
+            resultsList.innerHTML = html;
+            exportButtons.style.display = 'flex';
+            resultsDiv.classList.remove('hidden');
         }
 
-        // ===== STATS =====
-        async function refreshStats() {
-            const stats = await apiCall('/api/usage');
-            if (!stats) return;
+        function showError(message) {
+            const resultsDiv = document.getElementById('results');
+            const errorDiv = document.getElementById('errorMessage');
+            const exportButtons = document.getElementById('exportButtons');
 
-            currentStats = stats;
-
-            // Update display
-            document.getElementById('totalRequests')
-                .textContent = stats.total_requests;
-            document.getElementById('costUsed')
-                .textContent =
-                    `$${stats.total_cost.toFixed(2)}`;
-            document.getElementById('requestsLeft')
-                .textContent =
-                    stats.requests_remaining;
-            document.getElementById('budgetLeft')
-                .textContent =
-                    `$${stats.budget_remaining
-                        .toFixed(2)}`;
-
-            // Update progress bar
-            const percent = (
-                100 - (stats.budget_remaining /
-                    stats.max_cost_per_month * 100)
-            );
-            document.getElementById('budgetProgress')
-                .style.width =
-                    Math.min(100, Math.max(0,
-                        percent)) + '%';
-
-            // Update alerts
-            document.getElementById('budgetWarning')
-                .classList.remove('show');
-            document.getElementById('budgetExceeded')
-                .classList.remove('show');
-            document.getElementById('budgetOk')
-                .classList.remove('show');
-
-            if (stats.budget_exceeded) {
-                document
-                    .getElementById('budgetExceeded')
-                    .classList.add('show');
-                document.getElementById('searchBtn')
-                    .disabled = true;
-            } else if (stats.budget_remaining <
-                stats.max_cost_per_month * 0.2) {
-                document
-                    .getElementById('budgetWarning')
-                    .classList.add('show');
-                document.getElementById('searchBtn')
-                    .disabled = false;
-            } else {
-                document.getElementById('budgetOk')
-                    .classList.add('show');
-                document.getElementById('searchBtn')
-                    .disabled = false;
-            }
+            errorDiv.innerHTML = '❌ ERREUR: ' + message;
+            errorDiv.classList.remove('hidden');
+            exportButtons.style.display = 'none';
+            resultsDiv.classList.remove('hidden');
         }
 
-        // ===== EXPORT =====
-        async function exportJSON() {
-            if (!searchResults.length) {
-                alert('Aucun résultat à exporter');
-                return;
-            }
-
-            const data = {
-                timestamp: new Date()
-                    .toISOString(),
-                results_count: searchResults.length,
-                results: searchResults,
-                stats: currentStats
-            };
-
-            const blob = new Blob(
-                [JSON.stringify(data, null, 2)],
-                { type: 'application/json' });
-            downloadFile(blob, 'leads.json');
-        }
-
-        async function exportCSV() {
-            if (!searchResults.length) {
-                alert('Aucun résultat à exporter');
-                return;
-            }
-
-            let csv =
-                'Name,Address,Rating,Phone\n';
-            searchResults.forEach(place => {
-                const name = `"${place.name}"`;
-                const address =
-                    `"${place.address}"`;
-                const rating = place.rating || '';
-                const phone = place.phone || '';
-                csv += `${name},${address},` +
-                    `${rating},${phone}\n`;
-            });
-
-            const blob = new Blob([csv],
-                { type: 'text/csv' });
-            downloadFile(blob, 'leads.csv');
-        }
-
-        function downloadFile(blob, filename) {
-            const url =
-                URL.createObjectURL(blob);
-            const a = document
-                .createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }
-
-        // ===== UI HELPERS =====
-        function showAlert(id, message, type) {
-            const el = document.getElementById(id);
-            el.className =
-                `alert alert-${type} show`;
-            el.textContent = message;
-            setTimeout(() =>
-                el.classList.remove('show'),
-                5000);
-        }
-
-        function showLoader(show) {
-            document.getElementById('loader')
-                .classList.toggle('show', show);
-        }
-
-        // ===== INIT =====
-        document.addEventListener(
-            'DOMContentLoaded', () => {
-                refreshStats();
-                setInterval(refreshStats, 5000);
-            });
-
-        // Auto-search on Enter
-        document.getElementById('query')
-            .addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    performSearch();
+        async function updateUsage() {
+            try {
+                const response = await fetch('/api/usage');
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status);
                 }
+
+                const data = await response.json();
+                document.getElementById('usageContent').innerHTML = `
+                    <div style="margin-bottom: 15px;">
+                        <strong>Requetes ce mois:</strong> ${data.requests} / ${data.maxrequests}
+                    </div>
+                    <div class="usage-bar">
+                        <div class="usage-fill" style="width: ${data.usagepercentage}%;">
+                            ${data.usagepercentage.toFixed(1)}%
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px; color: #666; font-size: 0.9em;">
+                        Cout: ${data.cost} / ${data.maxcost}
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error updating usage:', error);
+                document.getElementById('usageContent').innerHTML = `
+                    <div class="error" style="background: #fff3cd; border-color: #ffc107; color: #856404; margin: 0;">
+                        Impossible de charger le budget
+                    </div>
+                `;
+            }
+        }
+
+        function exportJSON() {
+            if (!lastResults) {
+                return;
+            }
+
+            const json = JSON.stringify(lastResults, null, 2);
+            downloadFile(json, 'prospects.json', 'application/json');
+        }
+
+        function exportCSV() {
+            if (!lastResults || !lastResults.results) {
+                return;
+            }
+
+            // ✅ FIX: Use template literal with backticks and proper newlines
+            let csv = `Nom,Adresse,Latitude,Longitude,Note\n`;
+            
+            lastResults.results.forEach(function(place) {
+                // Escape quotes in place data (CSV standard)
+                const name = (place.name || '').replace(/"/g, '""');
+                const address = (place.address || '').replace(/"/g, '""');
+                const rating = (place.rating || 'N/A').toString().replace(/"/g, '""');
+                
+                csv += `"${name}","${address}",${place.lat},${place.lng},"${rating}"\n`;
             });
+
+            downloadFile(csv, 'prospects.csv', 'text/csv');
+        }
+
+        function downloadFile(content, filename, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+        }
     </script>
 </body>
 </html>
 """
 
-
 # ============================================================
-# ROUTES - API ENDPOINTS
+# FLASK ROUTES
 # ============================================================
-
 @app.route('/')
 def index():
-    """Serve the HTML interface."""
+    """Render home page with search form."""
+    logger.info('Home page accessed')
     return render_template_string(HTML_TEMPLATE)
 
 
 @app.route('/api/search', methods=['POST'])
-def search_leads():
-    """
-    Search for leads using Google Places API.
-
-    Expected JSON payload:
-    {
-        "query": "plombiers",
-        "location": "48.8566, 2.3522",
-        "radius": 5
-    }
-    """
+def api_search():
+    """API endpoint for searching places by city."""
     try:
-        # Get request data
-        data = request.get_json()
-        query = data.get('query', '').strip()
-        location_str = data.get('location',
-                                '').strip()
-        radius = data.get('radius', 5)
+        data = request.json
+        city = data.get('city', '').strip()
+        businesstype = data.get('businesstype', '').strip()
+        radius = data.get('radius', 5000)
 
-        if not query or not location_str:
-            return jsonify({
-                "success": False,
-                "error": "Query and location required"
-            }), 400
+        logger.info(
+            f'API Search request: city={city}, '
+            f'type={businesstype}, radius={radius}'
+        )
 
-        # Parse location (lat,lng format)
-        try:
-            lat, lng = map(float,
-                           location_str.split(','))
-        except (ValueError, IndexError):
-            return jsonify({
-                "success": False,
-                "error": "Invalid location format"
-            }), 400
+        if not city or not businesstype:
+            logger.warning('Missing required parameters')
+            return jsonify(
+                {'error': 'Ville et type de commerce requis', 'code': 'MISSING_PARAMS'}
+            ), 400
 
-        # Check budget before proceeding
-        if tracker.is_budget_exceeded():
-            return jsonify({
-                "success": False,
-                "error": "Budget exceeded"
-            }), 429
-
-        # Track request
-        tracker.log_request()
-
-        # Here you would call Google Places API
-        # For demo, return mock data
-        mock_places = [
-            {
-                "name": f"Business {i}",
-                "address": f"{i} Main St",
-                "rating": 4.5 + (i % 2) * 0.3,
-                "phone": "01 23 45 67 89",
-                "types": ["plumber", "service"]
-            }
-            for i in range(1, 6)
-        ]
-
-        return jsonify({
-            "success": True,
-            "places": mock_places,
-            "count": len(mock_places)
-        })
+        results = search_places(city, businesstype, radius)
+        logger.info(f'Search completed')
+        return jsonify(results)
 
     except Exception as e:
-        logger.error(f"Search error: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+        logger.error(f'Unhandled error in api_search: {e}')
+        return jsonify({'error': str(e), 'code': 'SERVER_ERROR'}), 500
 
 
 @app.route('/api/usage', methods=['GET'])
-def get_usage():
-    """Get current usage and budget stats."""
+def api_usage():
+    """API endpoint for usage statistics."""
     try:
-        stats = tracker.get_stats()
-        return jsonify({
-            "success": True,
-            "total_requests": stats['total_requests'],
-            "total_cost": stats['total_cost'],
-            "requests_remaining":
-                stats['requests_remaining'],
-            "budget_remaining":
-                stats['budget_remaining'],
-            "budget_exceeded":
-                tracker.is_budget_exceeded(),
-            "max_cost_per_month":
-                stats['max_cost_per_month']
-        })
+        logger.debug('Usage stats requested')
+        return jsonify(
+            {
+                'requests': tracker.requests_this_month,
+                'maxrequests': tracker.max_requests_per_month,
+                'cost': f'${tracker.cost_this_month:.2f}',
+                'maxcost': f'${tracker.max_cost_per_month:.2f}',
+                'usagepercentage': tracker.get_usage_percentage()
+            }
+        )
     except Exception as e:
-        logger.error(f"Usage error: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+        logger.error(f'Error in api_usage: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return jsonify(
+        {
+            'status': 'ok',
+            'api_keys_configured': bool(GOOGLE_PLACES_API_KEY),
+            'usage_tracker_active': True
+        }
+    )
 
 
 # ============================================================
 # ERROR HANDLERS
 # ============================================================
-
 @app.errorhandler(404)
-def not_found(error):
+def not_found_error(error):
     """Handle 404 errors."""
-    return jsonify({
-        "success": False,
-        "error": "Not found"
-    }), 404
+    logger.warning(f'404 Not Found: {request.path}')
+    return jsonify({'error': 'Endpoint not found', 'code': 'NOT_FOUND'}), 404
 
 
 @app.errorhandler(500)
-def server_error(error):
+def internal_error(error):
     """Handle 500 errors."""
-    return jsonify({
-        "success": False,
-        "error": "Server error"
-    }), 500
+    logger.error(f'500 Server Error: {error}')
+    return jsonify({'error': 'Internal server error', 'code': 'SERVER_ERROR'}), 500
 
 
 # ============================================================
-# MAIN
+# APPLICATION ENTRY POINT
 # ============================================================
-
 if __name__ == '__main__':
-    # Get config from environment
-    debug_mode = os.getenv('DEBUG', 'False') == 'True'
-    port = int(os.getenv('PORT', 5000))
-
-    # Run server
-    app.run(
-        host='0.0.0.0',
-        port=port,
-        debug=debug_mode
+    logger.info('=' * 60)
+    logger.info('Application started on http://localhost:5000')
+    logger.info(
+        f'API Keys configured: {bool(GOOGLE_PLACES_API_KEY)}'
     )
+    logger.info('Usage tracking: ACTIVE')
+    logger.info('Health check: /api/health')
+    logger.info('=' * 60)
+    app.run(debug=True, port=5000)
